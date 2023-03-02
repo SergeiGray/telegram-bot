@@ -18,6 +18,9 @@
   "homepage": "https://github.com/SergeiGray/telegram-bot#readme",
   "dependencies": {
     "dotenv": "^16.0.3",
-    "openai": "^3.1.0"
+    "node-schedule": "^2.1.1",
+    "node-telegram-bot-api": "^0.61.0",
+    "openai": "^3.1.0",
+    "string-template": "^1.0.0"
   }
 }
