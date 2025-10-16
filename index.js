@@ -101,21 +101,46 @@ const getImageUrl = async (publicKeyOfImageList, counterDir) => {
 
   return listOfImages?.[numberOfTodayImage - 1];
 };
+const sendError = (chatId, error, imageUrl) => {
+  bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chatId} ${error} ${imageUrl ?? ''}`)
+};
+const patchText = (text, snippets) => {
+  let patchedText = text;
+
+  Object.entries(snippets).forEach(([name, value]) => {
+    patchedText = patchedText.replace(new RegExp(`\\{${name}\\}`, 'g'), value);
+  });
+
+  return patchedText;
+};
+
+let dayOfSprint;
+let calendarDay;
+let sprintWorkingDay;
 
 let dailyImageUrl;
-getImageUrl(config.YANDEX_DISK_DAILY_PICTURES_PUBLIC_KEY, config.DAILY_PICTURE_NUMBER_STORAGE_DIR).then((res) => { dailyImageUrl = res; });
 let taskImageUrl;
-getImageUrl(config.YANDEX_DISK_TASK_PICTURES_PUBLIC_KEY, config.TASK_PICTURE_NUMBER_STORAGE_DIR).then((res) => { taskImageUrl = res; });
 let firstDayImageUrl;
-getImageUrl(config.YANDEX_DISK_FIRST_DAY_PICTURES_PUBLIC_KEY, config.FIRST_DAY_PICTURE_NUMBER_STORAGE_DIR).then((res) => { firstDayImageUrl = res; });
 let lastDayImageUrl;
-getImageUrl(config.YANDEX_DISK_LAST_DAY_PICTURES_PUBLIC_KEY, config.LAST_DAY_PICTURE_NUMBER_STORAGE_DIR).then((res) => { lastDayImageUrl = res; });
 let retroImageUrl;
-getImageUrl(config.YANDEX_DISK_RETRO_PICTURES_PUBLIC_KEY, config.RETRO_PICTURE_NUMBER_STORAGE_DIR).then((res) => { retroImageUrl = res; });
 
-let dayOfSprint = getDayOfSprint();
-let calendarDay = dayOfSprint ? dayOfSprint : 14;
-let sprintWorkingDay = getSprintWorkingDay(calendarDay);
+const dataUpdate = () => {
+  try {
+    dayOfSprint = getDayOfSprint();
+    calendarDay = dayOfSprint ? dayOfSprint : 14;
+    sprintWorkingDay = getSprintWorkingDay(calendarDay);
+
+    getImageUrl(config.YANDEX_DISK_DAILY_PICTURES_PUBLIC_KEY, config.DAILY_PICTURE_NUMBER_STORAGE_DIR).then((res) => { dailyImageUrl = res; });
+    getImageUrl(config.YANDEX_DISK_TASK_PICTURES_PUBLIC_KEY, config.TASK_PICTURE_NUMBER_STORAGE_DIR).then((res) => { taskImageUrl = res; });
+    getImageUrl(config.YANDEX_DISK_FIRST_DAY_PICTURES_PUBLIC_KEY, config.FIRST_DAY_PICTURE_NUMBER_STORAGE_DIR).then((res) => { firstDayImageUrl = res; });
+    getImageUrl(config.YANDEX_DISK_LAST_DAY_PICTURES_PUBLIC_KEY, config.LAST_DAY_PICTURE_NUMBER_STORAGE_DIR).then((res) => { lastDayImageUrl = res; });
+    getImageUrl(config.YANDEX_DISK_RETRO_PICTURES_PUBLIC_KEY, config.RETRO_PICTURE_NUMBER_STORAGE_DIR).then((res) => { retroImageUrl = res; });
+  } catch (e) {
+    bot.sendMessage(config.ID_OF_TEST_GROUP, `Ошибка при получении ссылки на изображение. ${e}`)
+  }
+};
+
+dataUpdate();
 
 bot.on('message', (msg) => {
   const chatId = msg.chat?.id;
@@ -142,17 +167,7 @@ bot.on('message', (msg) => {
   }
 });
 
-const jobOfUpdatingDataDaily = schedule.scheduleJob({hour: 6, minute: 0, dayOfWeek: new schedule.Range(1, 5)}, async () => {
-  dailyImageUrl = await getImageUrl(config.YANDEX_DISK_DAILY_PICTURES_PUBLIC_KEY, config.DAILY_PICTURE_NUMBER_STORAGE_DIR);
-  taskImageUrl = await getImageUrl(config.YANDEX_DISK_TASK_PICTURES_PUBLIC_KEY, config.TASK_PICTURE_NUMBER_STORAGE_DIR);
-  firstDayImageUrl = await getImageUrl(config.YANDEX_DISK_FIRST_DAY_PICTURES_PUBLIC_KEY, config.FIRST_DAY_PICTURE_NUMBER_STORAGE_DIR);
-  lastDayImageUrl = await getImageUrl(config.YANDEX_DISK_LAST_DAY_PICTURES_PUBLIC_KEY, config.LAST_DAY_PICTURE_NUMBER_STORAGE_DIR);
-  retroImageUrl = await getImageUrl(config.YANDEX_DISK_RETRO_PICTURES_PUBLIC_KEY, config.RETRO_PICTURE_NUMBER_STORAGE_DIR);
-
-  dayOfSprint = getDayOfSprint();
-  calendarDay = dayOfSprint ? dayOfSprint : 14;
-  sprintWorkingDay = getSprintWorkingDay(calendarDay);
-});
+const jobOfUpdatingDataDaily = schedule.scheduleJob({hour: 6, minute: 0, dayOfWeek: new schedule.Range(1, 5)}, dataUpdate);
 
 const job = schedule.scheduleJob({second: 0, dayOfWeek: new schedule.Range(1, 5)}, async (fireDate) => {
   const hour = fireDate.getHours();
@@ -165,13 +180,11 @@ const job = schedule.scheduleJob({second: 0, dayOfWeek: new schedule.Range(1, 5)
         if (job.hour === hour && job.minute === minute && job.type) {
           if (job.type === 'daily_meeting') {
             if (job?.withPicture && dailyImageUrl) {
-              bot.sendPhoto(chat.id, dailyImageUrl, {caption: `Сегодня ${sprintWorkingDay} день спринта. Дамы и господа, скоро начнётся дейлик! ${job?.urlOfMeetingRoom ?? ''}`}).catch((e) => {
-                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
-              });
+              bot.sendPhoto(chat.id, dailyImageUrl, {caption: patchText(config.TEXT_FOR_DAILY, {0: sprintWorkingDay, 1: job?.urlOfMeetingRoom ?? ''})})
+                  .catch((e) => sendError(chat.id, e, dailyImageUrl));
             } else {
-              bot.sendMessage(chat.id, `Сегодня ${sprintWorkingDay} день спринта. Дамы и господа, скоро начнётся дейлик! ${job?.urlOfMeetingRoom ?? ''}`).catch((e) => {
-                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
-              });
+              bot.sendMessage(chat.id, patchText(config.TEXT_FOR_DAILY, {0: sprintWorkingDay, 1: job?.urlOfMeetingRoom ?? ''}))
+                  .catch((e) => sendError(chat.id, e));
             }
           }
 
@@ -180,35 +193,45 @@ const job = schedule.scheduleJob({second: 0, dayOfWeek: new schedule.Range(1, 5)
               switch (dayOfSprint) {
                 case 0:
                   bot.sendPhoto(chat.id, lastDayImageUrl, {caption: config.TEXT_FOR_CLOSING_TASKS_ON_THE_LAST_DAY_OF_THE_SPRINT}).catch((e) => {
-                    bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
+                    sendError(chat.id, e, lastDayImageUrl);
                   });
                   break;
                 case 1:
                   bot.sendPhoto(chat.id, firstDayImageUrl, {caption: config.TEXT_FOR_CLOSING_TASKS_ON_THE_FIRST_DAY_OF_THE_SPRINT}).catch((e) => {
-                    bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
+                    sendError(chat.id, e, firstDayImageUrl);
                   });
                   break;
                 default:
                   bot.sendPhoto(chat.id, taskImageUrl, {caption: config.TEXT_FOR_CLOSING_TASKS}).catch((e) => {
-                    bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
+                    sendError(chat.id, e, taskImageUrl);
                   });
               }
             } else {
               bot.sendMessage(chat.id, config.TEXT_FOR_CLOSING_TASKS).catch((e) => {
-                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
+                sendError(chat.id, e);
               });
+            }
+          }
+
+          if (job.type === 'retro' && dayOfSprint === job.dayOfSprint) {
+            if (job?.withPicture && retroImageUrl) {
+              bot.sendPhoto(chat.id, retroImageUrl, {caption: job.text})
+                  .catch((e) => sendError(chat.id, e, retroImageUrl));
+            } else {
+              bot.sendMessage(chat.id, job.text)
+                  .catch((e) => sendError(chat.id, e));
             }
           }
 
           if (job.type === 'every_day') {
             bot.sendMessage(chat.id, job.text).catch((e) => {
-              bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
+              sendError(chat.id, e);
             });
           }
 
           if (job.type === 'once_per_sprint' && dayOfSprint === job.dayOfSprint) {
             bot.sendMessage(chat.id, job.text).catch((e) => {
-              bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
+              sendError(chat.id, e);
             });
           }
 
@@ -218,7 +241,9 @@ const job = schedule.scheduleJob({second: 0, dayOfWeek: new schedule.Range(1, 5)
             promiseOfCompliment?.then((text) => {
               if (text) {
                 const correctText = text?.match(/«(.*?)»/)?.[1] ?? text;
-                bot.sendMessage(chat.id, `${correctText}`).catch((e) => { bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)});
+                bot.sendMessage(chat.id, `${correctText}`).catch((e) => {
+                  sendError(chat.id, e);
+                });
               }
             });
           }
