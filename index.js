@@ -2,30 +2,14 @@ const fs = require('fs');
 const TelegramBot = require('node-telegram-bot-api');
 const schedule = require('node-schedule');
 const fetch = require('node-fetch');
+const querystring = require('node:querystring');
 const config = require('./config.json');
 
 const chatsList = config.CHATS_LIST;
 
 const bot = new TelegramBot(config.TELEGRAM_AVTOBOT_API_KEY, {polling: true});
 
-const getPictureNumberFromStorage = (counterDir, picturesDir) => {
-  if (fs.existsSync(counterDir)) {
-    const oldNumber = Number(fs.readFileSync(counterDir, "utf8"));
-    const numberOfPictures = fs.readdirSync(picturesDir)?.length;
-
-    if (oldNumber && numberOfPictures) {
-      const newNumber = oldNumber < numberOfPictures ? oldNumber + 1 : 1;
-
-      fs.writeFileSync(counterDir, `${newNumber}`);
-
-      return newNumber;
-    } 
-  }
-
-  fs.writeFileSync(counterDir, `1`);
-
-  return 1;
-};
+// getDayOfSprint возвращает день спринта от 0 до 13, где 0 - это последний 14ый день спринта
 const getDayOfSprint = () => Math.ceil((new Date().getTime() - new Date('2022-09-28T00:00:00').getTime()) / 60000 / 60 / 24) % 14;  //Возвращает число от 0 до 9. 0 - это 10й день
 const getSprintWorkingDay = (day) => {
   if (day > 10) {
@@ -40,14 +24,14 @@ const getSprintWorkingDay = (day) => {
 };
 const getCompliment = async (role, text) => {
   try {
-    const response = await fetch(config.YANDEX_API_URL, {
+    const response = await fetch(config.YANDEX_GPT_API_URL, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Api-Key ${config.YANDEX_API_KEY}`,
       },
       body: JSON.stringify({
-        modelUri: `gpt://${config.YANDEX_FOLDER_ID}/yandexgpt-lite`,
+        modelUri: `gpt://${config.YANDEX_GPT_FOLDER_ID}/yandexgpt-lite`,
         completionOptions: {
           stream: false,
             temperature: 0.6,
@@ -73,9 +57,62 @@ const getCompliment = async (role, text) => {
     bot.sendMessage(config.ID_OF_TEST_GROUP, `Ошибка при генерации комплимента`)
   }
 };
+const getListOfImageUrls = async (publicKey) => {
+  try {
+    const queryPublicKey = querystring.stringify({public_key: publicKey});
+    const response = await fetch(`${config.YANDEX_DISK_API_URL}?${queryPublicKey}&limit=1000`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Api-Key ${config.YANDEX_API_KEY}`,
+      },
+    });
 
-let pictureNumberForDaily = getPictureNumberFromStorage(config.DAILY_PICTURE_NUMBER_STORAGE_DIR, config.DAILY_PICTURES_DIR);
-let pictureNumberForClosingTask = getPictureNumberFromStorage(config.TASK_PICTURE_NUMBER_STORAGE_DIR, config.TASK_PICTURES_DIR);
+    const json = await response.json();
+    const listOfImageData = Array.from(json?._embedded?.items);
+    const listOfImages = listOfImageData.map((data) => data?.sizes?.[0]?.url);
+
+    return listOfImages;
+  } catch (e) {
+    bot.sendMessage(config.ID_OF_TEST_GROUP, `Ошибка при получении ссылок на изображения. Key: ${publicKey}`)
+  }
+};
+const getImageNumber = (counterDir, listOfImages) => {
+  if (fs.existsSync(counterDir)) {
+    const oldNumber = Number(fs.readFileSync(counterDir, "utf8"));
+    const numberOfPictures = listOfImages?.length;
+
+    if (oldNumber && numberOfPictures) {
+      const newNumber = oldNumber < numberOfPictures ? oldNumber + 1 : 1;
+
+      fs.writeFileSync(counterDir, `${newNumber}`);
+
+      return newNumber;
+    }
+  }
+
+  fs.writeFileSync(counterDir, `1`);
+
+  return 1;
+};
+const getImageUrl = async (publicKeyOfImageList, counterDir) => {
+  const listOfImages = await getListOfImageUrls(publicKeyOfImageList);
+  const numberOfTodayImage = getImageNumber(counterDir, listOfImages);
+
+  return listOfImages?.[numberOfTodayImage - 1];
+};
+
+let dailyImageUrl;
+getImageUrl(config.YANDEX_DISK_DAILY_PICTURES_PUBLIC_KEY, config.DAILY_PICTURE_NUMBER_STORAGE_DIR).then((res) => { dailyImageUrl = res; });
+let taskImageUrl;
+getImageUrl(config.YANDEX_DISK_TASK_PICTURES_PUBLIC_KEY, config.TASK_PICTURE_NUMBER_STORAGE_DIR).then((res) => { taskImageUrl = res; });
+let firstDayImageUrl;
+getImageUrl(config.YANDEX_DISK_FIRST_DAY_PICTURES_PUBLIC_KEY, config.FIRST_DAY_PICTURE_NUMBER_STORAGE_DIR).then((res) => { firstDayImageUrl = res; });
+let lastDayImageUrl;
+getImageUrl(config.YANDEX_DISK_LAST_DAY_PICTURES_PUBLIC_KEY, config.LAST_DAY_PICTURE_NUMBER_STORAGE_DIR).then((res) => { lastDayImageUrl = res; });
+let retroImageUrl;
+getImageUrl(config.YANDEX_DISK_RETRO_PICTURES_PUBLIC_KEY, config.RETRO_PICTURE_NUMBER_STORAGE_DIR).then((res) => { retroImageUrl = res; });
+
 let dayOfSprint = getDayOfSprint();
 let calendarDay = dayOfSprint ? dayOfSprint : 14;
 let sprintWorkingDay = getSprintWorkingDay(calendarDay);
@@ -105,9 +142,12 @@ bot.on('message', (msg) => {
   }
 });
 
-const jobOfUpdatingDataDaily = schedule.scheduleJob({hour: 6, minute: 0, dayOfWeek: new schedule.Range(1, 5)}, () => {
-  pictureNumberForDaily = getPictureNumberFromStorage(config.DAILY_PICTURE_NUMBER_STORAGE_DIR, config.DAILY_PICTURES_DIR);
-  pictureNumberForClosingTask = getPictureNumberFromStorage(config.TASK_PICTURE_NUMBER_STORAGE_DIR, config.TASK_PICTURES_DIR);
+const jobOfUpdatingDataDaily = schedule.scheduleJob({hour: 6, minute: 0, dayOfWeek: new schedule.Range(1, 5)}, async () => {
+  dailyImageUrl = await getImageUrl(config.YANDEX_DISK_DAILY_PICTURES_PUBLIC_KEY, config.DAILY_PICTURE_NUMBER_STORAGE_DIR);
+  taskImageUrl = await getImageUrl(config.YANDEX_DISK_TASK_PICTURES_PUBLIC_KEY, config.TASK_PICTURE_NUMBER_STORAGE_DIR);
+  firstDayImageUrl = await getImageUrl(config.YANDEX_DISK_FIRST_DAY_PICTURES_PUBLIC_KEY, config.FIRST_DAY_PICTURE_NUMBER_STORAGE_DIR);
+  lastDayImageUrl = await getImageUrl(config.YANDEX_DISK_LAST_DAY_PICTURES_PUBLIC_KEY, config.LAST_DAY_PICTURE_NUMBER_STORAGE_DIR);
+  retroImageUrl = await getImageUrl(config.YANDEX_DISK_RETRO_PICTURES_PUBLIC_KEY, config.RETRO_PICTURE_NUMBER_STORAGE_DIR);
 
   dayOfSprint = getDayOfSprint();
   calendarDay = dayOfSprint ? dayOfSprint : 14;
@@ -124,52 +164,52 @@ const job = schedule.scheduleJob({second: 0, dayOfWeek: new schedule.Range(1, 5)
       chat.jobs.forEach((job) => {
         if (job.hour === hour && job.minute === minute && job.type) {
           if (job.type === 'daily_meeting') {
-            if (job?.withPicture) {
-              bot.sendPhoto(chat.id, `src/assets/daily-pictures/${pictureNumberForDaily}.jpg`, {caption: `Сегодня ${sprintWorkingDay} день спринта. Господа, скоро начнётся дейлик! ${job?.urlOfMeetingRoom ?? ''}`}).catch((e) => {
-                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e?.response?.request?.body}`)
+            if (job?.withPicture && dailyImageUrl) {
+              bot.sendPhoto(chat.id, dailyImageUrl, {caption: `Сегодня ${sprintWorkingDay} день спринта. Дамы и господа, скоро начнётся дейлик! ${job?.urlOfMeetingRoom ?? ''}`}).catch((e) => {
+                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
               });
             } else {
-              bot.sendMessage(chat.id, `Сегодня ${sprintWorkingDay} день спринта. Господа, скоро начнётся дейлик! ${job?.urlOfMeetingRoom ?? ''}`).catch((e) => {
-                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e?.response?.request?.body}`)
+              bot.sendMessage(chat.id, `Сегодня ${sprintWorkingDay} день спринта. Дамы и господа, скоро начнётся дейлик! ${job?.urlOfMeetingRoom ?? ''}`).catch((e) => {
+                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
               });
             }
           }
 
           if (job.type === 'closing_tasks') {
-            if (job?.withPicture) {
+            if (job?.withPicture && taskImageUrl) {
               switch (dayOfSprint) {
                 case 0:
-                  bot.sendPhoto(chat.id, config.PATH_TO_THE_PICTURE_FOR_CLOSING_TASKS_ON_THE_LAST_DAY_OF_THE_SPRINT, {caption: config.TEXT_FOR_CLOSING_TASKS_ON_THE_LAST_DAY_OF_THE_SPRINT}).catch((e) => {
-                    bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e?.response?.request?.body}`)
+                  bot.sendPhoto(chat.id, lastDayImageUrl, {caption: config.TEXT_FOR_CLOSING_TASKS_ON_THE_LAST_DAY_OF_THE_SPRINT}).catch((e) => {
+                    bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
                   });
                   break;
                 case 1:
-                  bot.sendPhoto(chat.id, config.PATH_TO_THE_PICTURE_FOR_CLOSING_TASKS_ON_THE_FIRST_DAY_OF_THE_SPRINT, {caption: config.TEXT_FOR_CLOSING_TASKS_ON_THE_FIRST_DAY_OF_THE_SPRINT}).catch((e) => {
-                    bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e?.response?.request?.body}`)
+                  bot.sendPhoto(chat.id, firstDayImageUrl, {caption: config.TEXT_FOR_CLOSING_TASKS_ON_THE_FIRST_DAY_OF_THE_SPRINT}).catch((e) => {
+                    bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
                   });
                   break;
                 default:
-                  bot.sendPhoto(chat.id, `src/assets/task-pictures/${pictureNumberForClosingTask}.jpg`, {caption: config.TEXT_FOR_CLOSING_TASKS}).catch((e) => {
-                    bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e?.response?.request?.body}`)
+                  bot.sendPhoto(chat.id, taskImageUrl, {caption: config.TEXT_FOR_CLOSING_TASKS}).catch((e) => {
+                    bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
                   });
               }
             } else {
               bot.sendMessage(chat.id, config.TEXT_FOR_CLOSING_TASKS).catch((e) => {
-                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e?.response?.request?.body}`)
+                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
               });
             }
           }
 
-          if (job.type === 'retro' && dayOfSprint === job.dayOfSprint) {
-            if (job?.withPicture) {
-              bot.sendPhoto(chat.id, config.PATH_TO_THE_PICTURE_FOR_RETRO, {caption: config.TEXT_FOR_RETRO}).catch((e) => {
-                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e?.response?.request?.body}`)
-              });
-            } else {
-              bot.sendMessage(chat.id, config.TEXT_FOR_RETRO).catch((e) => {
-                bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e?.response?.request?.body}`)
-              });
-            }
+          if (job.type === 'every_day') {
+            bot.sendMessage(chat.id, job.text).catch((e) => {
+              bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
+            });
+          }
+
+          if (job.type === 'once_per_sprint' && dayOfSprint === job.dayOfSprint) {
+            bot.sendMessage(chat.id, job.text).catch((e) => {
+              bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)
+            });
           }
 
           if (job.type === 'compliment' && dayOfWeek === job.dayOfWeek) {
@@ -178,7 +218,7 @@ const job = schedule.scheduleJob({second: 0, dayOfWeek: new schedule.Range(1, 5)
             promiseOfCompliment?.then((text) => {
               if (text) {
                 const correctText = text?.match(/«(.*?)»/)?.[1] ?? text;
-                bot.sendMessage(chat.id, `${correctText}`).catch((e) => { bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e?.response?.request?.body}`)});
+                bot.sendMessage(chat.id, `${correctText}`).catch((e) => { bot.sendMessage(config.ID_OF_TEST_GROUP, `${config.ERROR_SENDING_THE_MESSAGE} ${chat.id} ${e}`)});
               }
             });
           }
