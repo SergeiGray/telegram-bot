@@ -70,7 +70,7 @@ const getListOfImageUrls = async (publicKey) => {
 
     const json = await response.json();
     const listOfImageData = Array.from(json?._embedded?.items);
-    const listOfImages = listOfImageData.map((data) => data?.sizes?.[0]?.url);
+    const listOfImages = listOfImageData.map((data) => data?.file);
 
     return listOfImages;
   } catch (e) {
@@ -167,7 +167,7 @@ bot.on('message', (msg) => {
   }
 });
 
-const jobOfUpdatingDataDaily = schedule.scheduleJob({hour: 6, minute: 0, dayOfWeek: new schedule.Range(1, 5)}, dataUpdate);
+const jobOfUpdatingDataDaily = schedule.scheduleJob({hour: new schedule.Range(7, 16, 4), minute: 15, dayOfWeek: new schedule.Range(1, 5)}, dataUpdate);
 
 const job = schedule.scheduleJob({second: 0, dayOfWeek: new schedule.Range(1, 5)}, async (fireDate) => {
   const hour = fireDate.getHours();
